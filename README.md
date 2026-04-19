@@ -1,14 +1,16 @@
-# FastAPI Calculator — Module 11 (User Auth + Calculation BREAD)
+# FastAPI Calculator — Module 12 (JWT Auth + Calculation BREAD)
 
-Builds on Modules 8 and 10 by adding a JWT-protected REST API for user registration/login and full BREAD operations (Browse, Read, Edit, Add, Delete) on calculations. Backed by GitHub Actions CI/CD that runs an integration test suite against Postgres and pushes a Docker image to Docker Hub on every merge to `main`.
+A JWT-authenticated REST API with full BREAD (Browse, Read, Edit, Add, Delete) operations on calculations. Backed by GitHub Actions CI/CD that runs integration tests against Postgres and pushes a Docker image to Docker Hub on every merge to `main`.
 
-## Feature Summary
+**Status:** 70 tests passing · 96% coverage · CI green · Image deployed to Docker Hub
+
+## Features
 
 ### Authentication
-- `POST /users/register` — create a new user (bcrypt-hashed password, uniqueness enforced at the DB layer).
-- `POST /users/login` — verify credentials and return a signed JWT bearer token.
-- `GET /users/me` — echoes the authenticated user (sanity-check for the token).
-- `app/auth/jwt.py` — `create_access_token`, `decode_access_token`, and the `get_current_user` FastAPI dependency.
+- `POST /users/register` — create a new user (bcrypt-hashed password, uniqueness enforced at DB layer)
+- `POST /users/login` — verify credentials and return a signed JWT bearer token (JSON body)
+- `POST /users/token` — OAuth2-compatible login (form-encoded) for Swagger UI's Authorize button
+- `GET /users/me` — echoes the authenticated user (sanity-check for the token)
 
 ### Calculation BREAD (all JWT-protected, all scoped to the calling user)
 | Method | Path | Description |
@@ -20,13 +22,13 @@ Builds on Modules 8 and 10 by adding a JWT-protected REST API for user registrat
 | DELETE | `/calculations/{id}` | Delete — permanently removes it (`204 No Content`) |
 
 ### Security
-- Passwords stored as bcrypt hashes (`$2b$...`) — never plaintext.
-- JWTs signed with HS256 using a secret loaded from `JWT_SECRET_KEY`.
-- Row-level authorization: users can only see and mutate their own calculations; cross-user requests return `404` (which avoids leaking existence of other users' data).
-- `UserRead` response model guarantees `password_hash` is never serialized.
+- Passwords stored as bcrypt hashes (`$2b$...`) — never plaintext
+- JWTs signed with HS256 using a secret loaded from `JWT_SECRET_KEY`
+- Row-level authorization: users can only see and mutate their own calculations; cross-user requests return `404` to avoid leaking existence of other users' data
+- `UserRead` response model guarantees `password_hash` is never serialized
 
 ### CI/CD
-- GitHub Actions spins up a Postgres 16 service container, runs unit + integration tests with coverage, then on `main` builds and pushes the Docker image to Docker Hub (with `latest` and SHA tags) and scans it with Trivy.
+- GitHub Actions spins up a Postgres 16 service container, runs unit + integration tests with coverage, then on `main` builds and pushes the Docker image to Docker Hub (tagged `latest` + SHA) and scans it with Trivy
 
 ## Project Layout
 
@@ -44,20 +46,19 @@ app/
     hashing.py             # bcrypt hash_password / verify_password
     jwt.py                 # JWT helpers + get_current_user dependency
   routers/
-    users.py               # /users/register, /users/login, /users/me
+    users.py               # /users/register, /users/login, /users/token, /users/me
     calculations.py        # BREAD endpoints
   operations/
     factory.py             # CalculationFactory (Add/Sub/Multiply/Divide)
 tests/
   conftest.py              # Transactional DB + TestClient + auth_client fixtures
-  unit/                    # No DB required
-  integration/             # Real Postgres — users + calculations + BREAD coverage
+  unit/                    # No DB required (31 tests)
+  integration/             # Real Postgres — users + calculations + BREAD (39 tests)
 .github/workflows/ci.yml   # Test job + Docker Hub push job
 Dockerfile
 docker-compose.yml
 requirements.txt
 .env.example
-REFLECTION.md
 ```
 
 ## Running Locally
@@ -66,7 +67,7 @@ REFLECTION.md
 
 ```bash
 cp .env.example .env
-# edit JWT_SECRET_KEY
+# edit .env and set JWT_SECRET_KEY
 docker compose up --build
 ```
 
@@ -110,6 +111,8 @@ Integration tests only:
 pytest tests/integration -v
 ```
 
+Expected result: **70 passed** with **96% coverage**.
+
 ## Manual API Verification (OpenAPI / Swagger)
 
 With the server running, open `http://localhost:8000/docs`.
@@ -118,9 +121,8 @@ With the server running, open `http://localhost:8000/docs`.
    ```json
    {"username": "demo", "email": "demo@example.com", "password": "strongpass1"}
    ```
-2. **Login** — expand `POST /users/login`, submit the same username/password, and copy the `access_token` from the response.
-3. **Authorize** — click the green **Authorize** button at the top right, paste the token, and submit. The lock icons on all calculation endpoints will close.
-4. **BREAD** — use the calculation endpoints in order:
+2. **Authorize** — click the green **Authorize** button top-right, enter your username and password, and click Authorize. Swagger uses the `/users/token` endpoint under the hood.
+3. **BREAD** — all calculation endpoints are now unlocked. Try them in order:
    - `POST /calculations` with `{"a": 6, "b": 7, "type": "Multiply"}` → 201 with `"result": 42`
    - `GET /calculations` → list of one
    - `GET /calculations/{id}` → the same record
@@ -139,18 +141,26 @@ docker run -p 8000:8000 \
 
 **Docker Hub repository:** https://hub.docker.com/r/gxutxm7/fastapi-calculator
 
-## CI/CD — Required GitHub Secrets
+## CI/CD — Required GitHub Secret
 
-In repo Settings → Secrets and variables → Actions:
+In repo Settings → Secrets and variables → Actions, add:
 
 | Secret | Purpose |
 |---|---|
-| `DOCKERHUB_USERNAME` | Docker Hub account (`gxutxm7`) |
-| `DOCKERHUB_TOKEN` | Docker Hub Access Token (Account Settings → Security → New Access Token) |
+| `DOCKERHUB_TOKEN` | Docker Hub Access Token (hub.docker.com → Account Settings → Security → New Access Token, Read/Write/Delete scope) |
 
-The workflow file is `.github/workflows/ci.yml`. The `build-and-push` job only runs on `push` events to `main` so pull requests still run tests without pushing images.
+The Docker Hub username (`gxutxm7`) is hardcoded in the workflow. The workflow file is `.github/workflows/ci.yml`. The `build-and-push` job only runs on `push` events to `main` so pull requests still run tests without pushing images.
 
-## Reflection
+## Environment Variables
 
-See `REFLECTION.md` for a write-up of challenges encountered during development and deployment.
+| Variable | Default | Purpose |
+|---|---|---|
+| `DATABASE_URL` | `postgresql+psycopg2://postgres:postgres@localhost:5432/fastapi_calc` | SQLAlchemy connection string |
+| `JWT_SECRET_KEY` | `dev-secret-change-me-in-production` | HMAC key used to sign JWTs. Generate a new value per environment. |
+| `JWT_ALGORITHM` | `HS256` | JWT signing algorithm |
+| `ACCESS_TOKEN_EXPIRE_MINUTES` | `60` | Token lifetime in minutes |
 
+Generate a production-grade secret:
+```bash
+python -c "import secrets; print(secrets.token_urlsafe(64))"
+```
